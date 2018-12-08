@@ -163,6 +163,7 @@ function argContain (variable){
     return false;
 }
 
+
 const parseWhile = (whi, curEnv, parsedParams) => {
     whi.test = subs(whi.test, curEnv, false);
     redsAndGreens[whi.loc.start.line - numOfRows] =
@@ -171,7 +172,6 @@ const parseWhile = (whi, curEnv, parsedParams) => {
     whi.body = parseExp(whi.body, tmpEnv, parsedParams);
     return whi;
 };
-
 
 const parseBlock = (block, curEnv, parsedParams) => {
     let newBlock = [];

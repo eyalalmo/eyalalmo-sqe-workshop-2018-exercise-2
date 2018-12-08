@@ -172,6 +172,7 @@ const parseWhile = (whi, curEnv, parsedParams) => {
     return whi;
 };
 
+
 const parseBlock = (block, curEnv, parsedParams) => {
     let newBlock = [];
     block.body.forEach((exp) => {

@@ -1,163 +1,206 @@
 import * as esprima from 'esprima';
 import * as escodegen from 'escodegen';
+import * as spliting from 'split-string';
 
-let obList = [];
+let redsAndGreens = [];
+let numOfRows = 0;
+let funcDecl = [];
 
 const parseCode = (codeToParse) => {
     let res = esprima.parseScript(codeToParse, {loc : true});
     return res;
 };
 
-export function makeTableHTML(parsedCode) {
-    let myArray = makeTable(parsedCode);
-    let result = '<table border=1>';
-    myArray = [['Line', 'Type', 'Name', 'Condition', 'Value']].concat(myArray);
-    for(let i=0; i<myArray.length; i++) {
-        result += '<tr>';
-        for(let j=0; j<myArray[i].length; j++){
-            if  (i === 0)
-                result += '<th>'+myArray[i][j]+'</th>';
-            else
-                result += '<td>'+myArray[i][j]+'</td>';
-        }
-        result += '</tr>';
+const makeParams = (str, vardecs) => {
+    let res = {};
+    let vals = spliting(str, {separator: ',', brackets: true});
+    for(let i = 0; i < vardecs.length; i++){
+        res[escodegen.generate(vardecs[i])] =
+            esprima.parseScript(vals[i]).body[0].expression;
     }
-    result += '</table>';
-    return result;
+    return res;
+};
+
+export function makeTableHTML(parsedCode, parsedParams) {
+    let res = '<pre>';
+    let codeString = makeTable(parsedCode, parsedParams);
+    let splitted = codeString.split('\n');
+    for(let i = 0; i < splitted.length; i++){
+        let color = pickColor(redsAndGreens[i+1]);
+        if(redsAndGreens[i+1] !== undefined)
+            res += '<span style="background-color:'
+                + color + ';">' + splitted[i] + '</span>';
+        else
+            res += splitted[i];
+        res += '\n';
+    }
+    res += '</pre>';
+    return res;
 }
 
-export const makeTable = (parsedCode) => {
-    obList = [];
-    parsedCode.body.forEach ((exp) =>{
-        parseExp(exp);
-    });
+function pickColor(x){
+    if(x)
+        return 'green';
+    return 'red';
+}
 
-    console.log(JSON.stringify(obList));
-    return obList;
+export const makeTable = (parsedCode, parsedParams) => {
+    numOfRows = 0;
+    funcDecl = [];
+    redsAndGreens = [];
+    let newBody = [];
+    let env = {};
+    parsedCode.body.forEach ((exp) =>{
+        let x = parseExp(exp, env, parsedParams);
+        newBody = [...newBody ,x];
+    });
+    parsedCode.body = newBody.filter(exp => exp);
+    return fixArrays(parsedCode);
 };
 
-const parseExp = (exp) => {
-    exp === null | exp === undefined ? retEmpty() :
+function fixArrays (parsedCode1){
+    let parsedCode = escodegen.generate(parsedCode1);
+    let j;
+    let res = '';
+    for(let i =0; i < parsedCode.length; i++){
+        if(parsedCode.charAt(i) === '['){
+            j = i;
+            while(parsedCode.charAt(++i) !== ']');
+            let tmp = parsedCode.substring(j, i + 1);
+            let x = tmp.replace(/ /gi, '');
+            let y = x.replace(/\n/gi, '');
+            res += y;
+        }
+        else res += parsedCode.charAt(i);
+    }
+    return res;
+}
+
+const parseExp = (exp, curEnv, parsedParams) => {
+    return exp === null | exp === undefined | exp === []? exp :
         exp.type === 'FunctionDeclaration' |
     exp.type === 'VariableDeclaration' |
-    exp.type === 'ExpressionStatement' |
-    exp.type === 'BlockStatement' ? parseFuncDecExpBlock(exp) :
-            exp.type === 'WhileStatement' |
-        exp.type === 'ForStatement' |
-        exp.type === 'IfStatement' ? parseCond(exp) :
-                parseReturn(exp);
+    exp.type === 'ExpressionStatement' ? parseFuncDecExpBlock(exp, curEnv, parsedParams) :
+            exp.type === 'BlockStatement'? parseFuncDecExpBlock(exp, curEnv,parsedParams) :
+                exp.type === 'WhileStatement' |
+        exp.type === 'IfStatement' ? parseCond(exp, curEnv, parsedParams) :
+                    parseReturn(exp, curEnv);
 };
 
-const retEmpty = () =>{
-    return [];
+const parseCond = (exp, curEnv, parsedParams) =>{
+    return exp.type === 'WhileStatement' ? parseWhile(exp, curEnv, parsedParams) :
+        parseIf(exp, curEnv, parsedParams);
 };
 
-const parseCond = (exp) =>{
-    exp.type === 'WhileStatement' ? parseWhile(exp) :
-        exp.type === 'ForStatement' ? parseFor(exp) :
-            parseIf(exp);
+const parseFuncDecExpBlock = (exp, curEnv, parsedParams) =>{
+    return exp.type === 'FunctionDeclaration' ? parseFun(exp, curEnv, parsedParams):
+        exp.type === 'VariableDeclaration' ? parseVarDec(exp.declarations, curEnv) :
+            exp.type === 'ExpressionStatement' ? parseAssignment(exp, curEnv) :
+                parseBlock(exp, curEnv, parsedParams);
 };
 
-const parseFuncDecExpBlock = (exp) =>{
-    exp.type === 'FunctionDeclaration' ? parseFun(exp) :
-        exp.type === 'VariableDeclaration' ? parseVarDec(exp.declarations) :
-            exp.type === 'ExpressionStatement' ? parseAssignment(exp.expression) :
-                parseBlock(exp.body);
-
+const parseFun = (funDec, curEnv, parsedParams) => {
+    parsedParams = makeParams(parsedParams, funDec.params);
+    funcDecl = funDec.params;
+    let newBody = parseExp(funDec.body, curEnv, parsedParams);
+    funDec.body = newBody;
+    return funDec;
 };
 
-const parseFun = (funDec) => {
-    let toAdd = [funDec.loc.start.line,
-        funDec.type,
-        funDec.id.name,
-        '',
-        ''];
-    obList.push(toAdd);
-    parseParams(funDec.params);
-    funDec.body.body.forEach ((exp) =>{
-        parseExp(exp);
-    });
-};
-
-const parseParams = (paramsArray) => {
-    paramsArray.forEach ((param) => {
-        let toAdd = [param.loc.start.line,
-            param.type,
-            param.name,
-            '',
-            ''];
-        obList.push(toAdd);
-    });
-};
-
-const parseVarDec = (varDecArray) => {
+const parseVarDec = (varDecArray, curEnv) => {
     varDecArray.forEach ((varDec) => {
-        let val = '';
-        if(varDec.init !== null && varDec.init !== undefined)
-            val = escodegen.generate(varDec.init);
-        let toAdd = [varDec.loc.start.line,
-            varDec.type,
-            varDec.id.name,
-            '',
-            val];
-        obList.push(toAdd);
+        let variable = varDec.id.name;
+        if(varDec.init)
+            curEnv[variable] = subs(varDec.init, curEnv, false);
     });
+    numOfRows++;
+    return null;
 };
 
-const parseAssignment = (ass) => {
-    let toAdd = [ass.loc.start.line,
-        ass.type,
-        ass.left.name,
-        '',
-        escodegen.generate(ass.right)];
-    obList.push(toAdd);
+function subs(exp, curEnv, args) {
+    let tmp = escodegen.generate(exp);
+    let newExp = esprima.parseScript(tmp).body[0].expression;
+    if(!args) newExp = exp;
+    if(newExp.type == 'Identifier'){
+        let newVal = curEnv[newExp.name];
+        if(newVal)
+            newExp = newVal;
+        return newExp;
+    }
+    return subsHelper(newExp, curEnv, args);
+}
+
+function subsHelper(newExp, curEnv, args) {
+    if(newExp.type == 'BinaryExpression'){
+        newExp.left = subs(newExp.left, curEnv, args);
+        newExp.right = subs(newExp.right, curEnv, args);
+    }
+    else if(newExp.type == 'MemberExpression'){
+        newExp.object = subs(newExp.object, curEnv, args);
+        newExp.property = subs(newExp.property, curEnv, args);
+    }
+    else if(newExp.type == 'ArrayExpression'){
+        newExp.elements = newExp.elements.map((x) => subs(x, curEnv, args));
+    }
+    return newExp;
+}
+
+const parseAssignment = (ass, curEnv) => {
+    let variable = ass.expression.left.name;
+    ass.expression.right = subs(ass.expression.right, curEnv, false);
+    curEnv[variable] = subs(ass.expression.right, curEnv, false);
+    if(argContain(variable))
+        return ass;
+    else numOfRows++;
+    return null;
 };
 
-const parseWhile = (whi) => {
-    let toAdd = [whi.loc.start.line,
-        whi.type,
-        '',
-        escodegen.generate(whi.test),
-        ''];
-    obList.push(toAdd);
-    parseExp(whi.body);
+function argContain (variable){
+    for(let i = 0; i < funcDecl.length; i++){
+        if(funcDecl[i].name == variable)
+            return true;
+    }
+    return false;
+}
+
+const parseWhile = (whi, curEnv, parsedParams) => {
+    whi.test = subs(whi.test, curEnv, false);
+    redsAndGreens[whi.loc.start.line - numOfRows] =
+        eval(escodegen.generate(subs(whi.test, parsedParams, true)));
+    let tmpEnv = Object.assign({}, curEnv);
+    whi.body = parseExp(whi.body, tmpEnv, parsedParams);
+    return whi;
 };
 
-const parseFor = (fo) => {
-    let toAdd = [fo.loc.start.line,
-        fo.type,
-        '',
-        escodegen.generate(fo.test),
-        ''];
-    obList.push(toAdd);
-    parseVarDec(fo.init.declarations);
-    parseExp(fo.body);
-};
-
-const parseBlock = (block) => {
-    block.forEach((exp) => {
-        parseExp(exp);
+const parseBlock = (block, curEnv, parsedParams) => {
+    let newBlock = [];
+    block.body.forEach((exp) => {
+        let newExp = parseExp(exp, curEnv, parsedParams);
+        newBlock = [...newBlock, newExp];
     });
+    block.body = newBlock.filter(exp => exp);
+    return block;
 };
 
-const parseIf = (ifState) => {
-    let toAdd = [ifState.loc.start.line,
-        ifState.type,
-        '',
-        escodegen.generate(ifState.test),
-        ''];
-    obList.push(toAdd);
-    parseExp(ifState.consequent);
-    parseExp(ifState.alternate);
+const parseIf = (ifState, curEnv, parsedParams) => {
+    ifState.test = subs(ifState.test, curEnv, false);
+    let tmpEnv = Object.assign({}, curEnv);
+    let x = subs(ifState.test, parsedParams, true);
+    redsAndGreens[ifState.loc.start.line - numOfRows] =
+        eval(escodegen.generate(x));
+    let newCons = parseExp(ifState.consequent, tmpEnv, parsedParams);
+    ifState.consequent = newCons;
+    tmpEnv = Object.assign({}, curEnv);
+    if(ifState.alternate)
+        numOfRows++;
+    let newAlt = parseExp(ifState.alternate, tmpEnv, parsedParams);
+    ifState.alternate = newAlt;
+    return ifState;
 };
 
-const parseReturn = (returnState) => {
-    let toAdd = [returnState.loc.start.line,
-        returnState.type,
-        '',
-        '',
-        escodegen.generate(returnState.argument)];
-    obList.push(toAdd);
+const parseReturn = (returnState, curEnv) => {
+    returnState.argument = subs(returnState.argument, curEnv, false);
+    return returnState;
 };
 
 export {parseCode};
